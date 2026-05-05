@@ -1,0 +1,40 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "seed": "node scripts/seed.js",
+    "seed:authority": "node scripts/seed-authority-records.js",
+    "reset:system": "node scripts/reset-system.js",
+    "cleanup:data": "node scripts/cleanup-data.js",
+    "test:api": "node scripts/test-api.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.7",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "firebase": "^10.14.1",
+    "fuse.js": "^7.3.0",
+    "helmet": "^7.1.0",
+    "joi": "^17.12.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.1.1",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.8",
+    "nodemon": "^3.0.3",
+    "sharp": "^0.33.2",
+    "tesseract.js": "^7.0.0"
+  }
+}

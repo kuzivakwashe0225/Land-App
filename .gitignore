@@ -23,3 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 .env
+server/.env
+
+# Uploads and user documents — NEVER commit these
+uploads/
+server/uploads/
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.gif

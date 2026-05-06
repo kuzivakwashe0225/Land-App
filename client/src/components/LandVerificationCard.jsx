@@ -122,7 +122,7 @@ const LandVerificationCard = ({ land, onVerify, onFlag, onViewDetails, userRole,
                 </p>
                 <p className="text-xs text-gray-500">{land.owner?.email}</p>
               </div>
-              {land.owner?.verification?.sellerDetailsApproved ? (
+              {land.owner?.verification?.kycStatus === 'APPROVED' ? (
                 <div className="px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800">
                   ✓ Verified
                 </div>
@@ -151,15 +151,15 @@ const LandVerificationCard = ({ land, onVerify, onFlag, onViewDetails, userRole,
 
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-600">Deeds Office:</span>
-                  <span className={`font-semibold ${land.verification.deedsOfficeVerified ? 'text-green-600' : 'text-red-600'}`}>
-                    {land.verification.deedsOfficeVerified ? 'Verified' : 'Not Verified'}
+                  <span className="text-gray-600">Authority Registry:</span>
+                  <span className={`font-semibold ${land.verification.authorityVerified || land.verification.autoVerification?.decision === 'AUTO_APPROVE' ? 'text-green-600' : 'text-yellow-600'}`}>
+                    {land.verification.authorityVerified || land.verification.autoVerification?.decision === 'AUTO_APPROVE' ? '✓ Verified' : '⟳ Pending Officer Review'}
                   </span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-600">Municipal:</span>
-                  <span className={`font-semibold ${land.verification.municipalVerified ? 'text-green-600' : 'text-red-600'}`}>
-                    {land.verification.municipalVerified ? 'Verified' : 'Not Verified'}
+                  <span className="text-gray-600">Deeds Office / Municipal:</span>
+                  <span className={`font-semibold ${land.verification.authorityVerified || land.verification.autoVerification?.decision === 'AUTO_APPROVE' || land.verification.status === 'VERIFIED' ? 'text-green-600' : 'text-red-600'}`}>
+                    {land.verification.authorityVerified || land.verification.autoVerification?.decision === 'AUTO_APPROVE' || land.verification.status === 'VERIFIED' ? '✓ Verified' : 'Not Verified'}
                   </span>
                 </div>
                 {land.verification.verificationDate && (

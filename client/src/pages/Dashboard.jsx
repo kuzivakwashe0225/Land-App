@@ -110,10 +110,10 @@ const Dashboard = () => {
                 setStats({
                     totalListings: isSellerRole ? userListings.length : (platformStats.totalListings || 0),
                     verifiedListings: isSellerRole
-                        ? userListings.filter(l => ['VERIFIED', 'AUTO_VERIFIED'].includes(l.verification?.status)).length
+                        ? userListings.filter(l => ['VERIFIED', 'AUTO_VERIFIED', 'AUTHORITY_VERIFIED'].includes(l.verification?.status)).length
                         : (platformStats.verifiedListings || 0),
                     pendingVerifications: isSellerRole
-                        ? userListings.filter(l => ['PENDING_VERIFICATION', 'REQUIRES_REVIEW'].includes(l.verification?.status)).length
+                        ? userListings.filter(l => ['PENDING_VERIFICATION', 'REQUIRES_REVIEW', 'PENDING_DOCUMENT_REVIEW'].includes(l.verification?.status)).length
                         : (platformStats.pendingListings || 0),
                     activeInquiries: activeInquiries || 0,
                     unreadMessages: unreadTotal || 0,
@@ -320,8 +320,8 @@ const Dashboard = () => {
                                                             <p className="font-black text-slate-800 text-lg">${land.transaction?.listedPrice?.amount?.toLocaleString()}</p>
                                                         </td>
                                                         <td className="px-8 py-6">
-                                                            <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 ${['VERIFIED', 'AUTO_VERIFIED'].includes(land.verification?.status) ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-                                                                <div className={`w-1.5 h-1.5 rounded-full ${['VERIFIED', 'AUTO_VERIFIED'].includes(land.verification?.status) ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
+                                                            <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 ${['VERIFIED', 'AUTO_VERIFIED', 'AUTHORITY_VERIFIED'].includes(land.verification?.status) ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                                <div className={`w-1.5 h-1.5 rounded-full ${['VERIFIED', 'AUTO_VERIFIED', 'AUTHORITY_VERIFIED'].includes(land.verification?.status) ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
                                                                 {land.verification?.status || 'PENDING'}
                                                             </span>
                                                         </td>

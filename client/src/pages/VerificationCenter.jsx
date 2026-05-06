@@ -75,13 +75,29 @@ const VerificationCenter = () => {
     }
   };
 
-  const handleVerifyLand = async (landId, status) => {
+  const handleVerifyLand = async (landId, status, score = 100) => {
     try {
+      let notes = `${status === 'VERIFIED' ? 'Approved' : 'Rejected'} via Verification Center`;
+      
+      // Admin override reason prompt
+      if (status === 'VERIFIED' && score < 70) {
+        const reason = window.prompt("Admin Override Required: Please provide a reason for approving this low-score stand (min 10 characters):");
+        if (!reason) {
+          toast.error("Override cancelled.");
+          return;
+        }
+        if (reason.length < 10) {
+          toast.error("Reason too short. Must be at least 10 characters.");
+          return;
+        }
+        notes = reason;
+      }
+
       const res = await fetch(`/api/land/${landId}/verify`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verificationStatus: status, verificationNotes: `${status === 'VERIFIED' ? 'Approved' : 'Rejected'} via Verification Center` }),
+        body: JSON.stringify({ verificationStatus: status, verificationNotes: notes }),
       });
       const data = await res.json();
       if (data.success) {
@@ -223,16 +239,11 @@ const VerificationCenter = () => {
                           <button 
                             onClick={() => {
                               const score = land.verification?.autoVerification?.riskScore || 0;
-                              if (score < 70 && (currentUser?.rest?.role || currentUser?.role) !== 'SYSTEM_ADMIN') {
-                                toast.error('Admin Override Required: Score is too low.');
-                                return;
-                              }
-                              handleVerifyLand(land._id, 'VERIFIED');
+                              handleVerifyLand(land._id, 'VERIFIED', score);
                             }}
-                            className={`${(land.verification?.autoVerification?.riskScore || 0) < 70 && (currentUser?.rest?.role || currentUser?.role) !== 'SYSTEM_ADMIN' ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'} text-white px-2 py-1 rounded text-xs`}
-                            title={(land.verification?.autoVerification?.riskScore || 0) < 70 && (currentUser?.rest?.role || currentUser?.role) !== 'SYSTEM_ADMIN' ? 'Admin Override Required (Score < 70%)' : ''}
+                            className="bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded text-xs"
                           >
-                            {(land.verification?.autoVerification?.riskScore || 0) < 70 && (currentUser?.rest?.role || currentUser?.role) !== 'SYSTEM_ADMIN' ? '🔒 Blocked' : '✓ Approve'}
+                            ✓ Approve
                           </button>
                         )}
                         {land.verification?.status !== 'REJECTED' && (

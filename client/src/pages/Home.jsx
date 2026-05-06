@@ -16,12 +16,11 @@ function Home() {
   useEffect(() => {
     const fetchRecentLands = async () => {
       try {
-        const response = await getLandListings({ limit: 4, verified: true, status: 'AVAILABLE' });
-        // The API might return { success: true, data: [...] } based on landController
-        if (response.data) {
-          setRecentLands(response.data);
-        } else if (Array.isArray(response)) {
-          setRecentLands(response);
+        // Use the public endpoint — no auth required, only shows isPublic=true verified listings
+        const response = await fetch('/api/land/public?limit=4');
+        if (response.ok) {
+          const data = await response.json();
+          setRecentLands(data.data || []);
         }
       } catch (error) {
         console.log("Error fetching recent lands:", error);

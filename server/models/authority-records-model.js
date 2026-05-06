@@ -1,6 +1,18 @@
 import mongoose from 'mongoose';
 
+/**
+ * AuthorityRecords Model
+ *
+ * Simulates the Zimbabwe Deeds Office / Municipal Authority database.
+ * Used to verify that a listed stand genuinely exists, is correctly zoned,
+ * has no disputes or encumbrances, and has cleared rates.
+ *
+ * IMPORTANT: This model does NOT verify that the seller owns the stand.
+ * Seller identity is verified separately via KYC (ID doc + selfie).
+ * A stand may be council-owned, developer-owned, or have no previous owner.
+ */
 const authorityRecordsSchema = new mongoose.Schema({
+  // ── Stand Identity ─────────────────────────────────────────────────────────
   standNumber: {
     type: String,
     required: true,
@@ -8,39 +20,6 @@ const authorityRecordsSchema = new mongoose.Schema({
     uppercase: true,
     trim: true,
     index: true
-  },
-  currentOwner: {
-    name: {
-      type: String,
-      required: true,
-      trim: true
-    },
-    nationalId: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      index: true
-    }
-  },
-  address: {
-    street: String,
-    suburb: {
-      type: String,
-      required: true,
-      enum: ['HARARE', 'CHITUNGWIZA', 'KADOMA', 'BULAWAYO', 'GWERU', 'MASVINGO', 'MUTARE']
-    },
-    city: String,
-    province: String
-  },
-  standSize: {
-    squareMeters: Number,
-    hectares: Number
-  },
-  landUseType: {
-    type: String,
-    enum: ['RESIDENTIAL', 'COMMERCIAL', 'INDUSTRIAL', 'AGRICULTURAL', 'MIXED_USE'],
-    required: true
   },
   titleDeedNumber: {
     type: String,
@@ -63,29 +42,77 @@ const authorityRecordsSchema = new mongoose.Schema({
     trim: true,
     index: true
   },
-  location: {
+
+  // ── Registered Owner (Council / Company / Individual) ──────────────────────
+  // NOTE: This is the authority-registered owner of the stand, which may be
+  // a local council, a developer, or a previous owner. It is NOT used to
+  // verify the seller's identity (seller identity is verified via KYC).
+  registeredOwner: {
+    fullName: {
+      type: String,
+      trim: true,
+      default: 'Not Registered / Council'
+    },
+    entityType: {
+      type: String,
+      enum: ['INDIVIDUAL', 'COMPANY', 'COUNCIL', 'DEVELOPER', 'UNKNOWN'],
+      default: 'UNKNOWN'
+    }
+  },
+
+  // ── Text Address (human-readable location) ─────────────────────────────────
+  address: {
+    street: String,
+    suburb: {
+      type: String,
+      required: true,
+      enum: ['HARARE', 'CHITUNGWIZA', 'KADOMA', 'BULAWAYO', 'GWERU', 'MASVINGO', 'MUTARE']
+    },
+    city: String,
+    province: String
+  },
+
+  // ── Geospatial Location (GeoJSON Point) ────────────────────────────────────
+  // Kept separate from the address block to avoid Mongoose schema overwrite.
+  geoLocation: {
     type: {
       type: String,
       enum: ['Point'],
       default: 'Point'
     },
     coordinates: {
-      type: [Number], // [longitude, latitude]
+      type: [Number], // [longitude, latitude] — GeoJSON standard
       required: true
     }
   },
+
+  // ── Stand Details ──────────────────────────────────────────────────────────
+  standSize: {
+    squareMeters: Number,
+    hectares: Number
+  },
+  landUseType: {
+    type: String,
+    enum: ['RESIDENTIAL', 'COMMERCIAL', 'INDUSTRIAL', 'AGRICULTURAL', 'MIXED_USE'],
+    required: true
+  },
+  zoning: {
+    type: String,
+    enum: ['RESIDENTIAL', 'COMMERCIAL', 'INDUSTRIAL', 'AGRICULTURAL', 'MIXED_USE']
+  },
+
+  // ── Stand Status ───────────────────────────────────────────────────────────
   status: {
     type: String,
     enum: [
-      'VALID', 
-      'DISPUTED', 
-      'SOLD', 
-      'DUPLICATE', 
-      'UNDER_INVESTIGATION', 
-      'NOT_FOUND', 
-      'UNALLOCATED',     // Municipality has defined the stand but not allocated it to anyone
-      'PRE_PROCESSING',  // Stand is in the planning phase, not yet ready for allocation
-      'PROCESSED'        // Stand is ready for allocation or sale
+      'VALID',             // Stand is registered and valid
+      'DISPUTED',          // Ownership or boundary dispute exists
+      'SOLD',              // Previously sold
+      'DUPLICATE',         // Duplicate record detected
+      'UNDER_INVESTIGATION',
+      'NOT_FOUND',
+      'UNALLOCATED',       // Municipality defined but not yet allocated
+      'PRE_PROCESSING'     // In planning phase
     ],
     default: 'VALID'
   },
@@ -94,39 +121,50 @@ const authorityRecordsSchema = new mongoose.Schema({
     enum: ['VACANT', 'ALLOCATED', 'LEASED', 'PENDING_TRANSFER'],
     default: 'VACANT'
   },
+  disputeStatus: {
+    type: String,
+    enum: ['NONE', 'DISPUTED', 'UNDER_INVESTIGATION', 'RESOLVED'],
+    default: 'NONE'
+  },
+
+  // ── Financial & Legal Compliance ───────────────────────────────────────────
+  ratesCleared: {
+    type: Boolean,
+    default: true
+  },
+  encumbrances: {
+    type: [String], // e.g., ['MORTGAGE', 'CAVEAT', 'LIEN']
+    default: []
+  },
+  isEligibleForResale: {
+    type: Boolean,
+    default: true
+  },
+
+  // ── Metadata ───────────────────────────────────────────────────────────────
   isVerifiedByAuthority: {
     type: Boolean,
     default: true
   },
-  // Additional metadata
-  registeredOwner: String,
   dateRegistered: Date,
   lastTransferDate: Date,
-  encumbrances: [String], // e.g., ['MORTGAGE', 'CAVEAT']
-  ratesCleared: { type: Boolean, default: true },
-  remarks: String,
+  remarks: String
 
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
+}, {
+  timestamps: true
 });
 
-// Indexes for efficient searching
-authorityRecordsSchema.index({ standNumber: 1, nationalId: 1 });
+// ── Indexes ─────────────────────────────────────────────────────────────────
 authorityRecordsSchema.index({ 'address.suburb': 1, status: 1 });
-authorityRecordsSchema.index({ location: '2dsphere' }); // For geospatial queries
+authorityRecordsSchema.index({ geoLocation: '2dsphere' }); // Geospatial index
+authorityRecordsSchema.index({ titleDeedNumber: 1, standNumber: 1 });
 
-// Pre-save middleware to update timestamp
-authorityRecordsSchema.pre('save', function(next) {
+// ── Pre-save middleware ──────────────────────────────────────────────────────
+authorityRecordsSchema.pre('save', function (next) {
   this.updatedAt = new Date();
   next();
 });
 
-const AuthorityRecords = mongoose.model('AuthorityRecords', authorityRecordsSchema);
+const AuthorityRecord = mongoose.model('AuthorityRecords', authorityRecordsSchema);
 
-export default AuthorityRecords;
+export default AuthorityRecord;

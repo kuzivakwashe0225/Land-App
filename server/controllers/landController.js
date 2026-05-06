@@ -7,6 +7,7 @@ import { verifyDeedsOffice, verifyMunicipalRecords } from '../utils/externalApis
 import { createNotification } from '../utils/notifications.js';
 import { runFullVerification, haversineDistance } from '../services/verificationService.js';
 import { verifyListingByGeo } from '../services/geoVerificationService.js';
+import { verifyListingAgainstAuthority } from '../services/authorityVerificationService.js';
 
 // ── Create Land Listing — with authority validation + auto-verification ─────────
 export const createLandListing = async (req, res) => {
@@ -36,6 +37,14 @@ export const createLandListing = async (req, res) => {
         message: 'User not found'
       });
     }
+
+    // ── KYC AWARENESS: Note seller's KYC status (do NOT block listing creation) ──
+    // Business rule: A seller CAN create a listing before KYC is complete.
+    // The listing will be created but marked as NOT seller-verified.
+    // It will not appear to buyers until:
+    //   (a) The seller completes KYC (ID + selfie upload), AND
+    //   (b) A Verification Officer approves the listing.
+    const kycApproved = user.verification?.kycStatus === 'APPROVED';
 
     // GPS Coordinates are now RECOMMENDED but not MANDATORY
     const hasCoordinates = location.latitude != null && location.longitude != null;
@@ -117,51 +126,69 @@ export const createLandListing = async (req, res) => {
       fraudFlags: fraudFlags
     });
 
-    // ── GEO VERIFICATION LOGIC ───────────────────────────────────────────
-    const sellerUser = await User.findById(req.user.id);
-    const verificationResult = await verifyListingByGeo(land, sellerUser);
+    // ── AUTHORITY VERIFICATION (New unified service) ──────────────────────
+    // This checks the STAND itself — NOT the seller's identity.
+    // Seller identity is already verified via KYC above.
+    const sellerUser = user; // already loaded
+    const sellerKycApproved = kycApproved; // kycApproved set above
 
-    land.verification.status = verificationResult.verificationStatus;
+    const authResult = await verifyListingAgainstAuthority(land, sellerKycApproved);
+
+    // Map result onto the land document
+    land.verification.status = authResult.verificationStatus;
+    land.verification.authorityVerified = authResult.decision === 'AUTO_APPROVE';
+    land.verification.sellerVerified = kycApproved;
+    land.verification.isVerified = false; // Always false until officer approves
+    land.verification.rejectionReason = authResult.decision === 'AUTO_REJECT'
+      ? (authResult.notes.filter(n => n.startsWith('❌')).join('; ') || 'Auto-rejected by system')
+      : null;
+
     land.verification.autoVerification = {
       ranAt: new Date(),
-      verificationScore: verificationResult.verificationScore,
-      riskScore: 100 - verificationResult.verificationScore,
-      decision: verificationResult.verificationStatus === 'AUTO_VERIFIED' ? 'AUTO_APPROVE' : (verificationResult.verificationStatus === 'REJECTED' ? 'AUTO_REJECT' : 'HUMAN_REVIEW'),
-      reason: verificationResult.rejectionReason,
-      isDuplicateRejection: verificationResult.isDuplicate || false,
-      flags: verificationResult.verificationNotes
+      verificationScore: authResult.score,
+      riskScore: 100 - authResult.score,
+      decision: authResult.decision,
+      reason: authResult.notes.join(' | '),
+      isDuplicateRejection: authResult.isDuplicate || false,
+      flags: authResult.flags
     };
-    land.verification.isVerified = verificationResult.verificationStatus === 'AUTO_VERIFIED';
-    land.verification.authorityVerified = verificationResult.matchedAuthorityRecord != null;
-    land.verification.rejectionReason = verificationResult.rejectionReason;
-    land.matchedAuthorityRecord = verificationResult.matchedAuthorityRecord;
 
-    if (verificationResult.verificationStatus === 'AUTO_VERIFIED') {
-      land.isPublic = true;
+    // Store authority match details for officer review
+    if (authResult.authorityRecordId) {
+      land.verification.authorityMatch = {
+        authorityRecordId: authResult.authorityRecordId,
+        titleDeedMatched: !authResult.flags.includes('TITLE_DEED_NOT_MATCHED'),
+        score: authResult.score,
+        decision: authResult.decision,
+        flags: authResult.flags,
+        coordinateDistanceMeters: authResult.distanceMeters
+      };
     }
 
-    // System admin override
-    if (req.user.role === 'SYSTEM_ADMIN' && req.body.verificationStatus) {
-      land.verification.status = req.body.verificationStatus;
-    }
+    // CRITICAL BUSINESS RULE: isPublic is ALWAYS false on creation.
+    // Only a Verification Officer / Admin manual approval sets isPublic = true.
+    land.isPublic = false;
+    land.listingStatus = 'pending_verification';
+
     // Override transaction status if flagged
     if (fraudFlags.length > 0) {
       land.transaction.status = 'FLAGGED';
     }
 
     await land.save();
-    console.log('Land listing saved:', land._id);
+    console.log(`Land listing saved: ${land._id} | Authority decision: ${authResult.decision} | Score: ${authResult.score}`);
 
-    // ── AUTO-REJECTION NOTIFICATIONS ─────────────────────────────────────
-    if (verificationResult.verificationStatus === 'REJECTED') {
+
+    // ── AUTO-REJECTION NOTIFICATIONS ───────────────────────────────────
+    if (authResult.decision === 'AUTO_REJECT') {
       setImmediate(async () => {
         try {
           // Notify seller about auto-rejection
           await createNotification(req.user.id, 'LAND_VERIFICATION_REJECTED', {
             landId: land._id,
             standNumber: land.standNumber,
-            reason: verificationResult.rejectionReason,
-            score: verificationResult.verificationScore
+            reason: authResult.notes.filter(n => n.startsWith('❌')).join('; '),
+            score: authResult.score
           });
 
           // Notify all verification officers and admins
@@ -176,9 +203,9 @@ export const createLandListing = async (req, res) => {
               landId: land._id,
               standNumber: land.standNumber,
               sellerName: `${sellerUser.firstName} ${sellerUser.lastName}`,
-              reason: verificationResult.rejectionReason,
-              score: verificationResult.verificationScore,
-              isDuplicate: verificationResult.isDuplicate
+              reason: authResult.notes.filter(n => n.startsWith('❌')).join('; '),
+              score: authResult.score,
+              isDuplicate: authResult.isDuplicate
             });
           }
         } catch (notifErr) {
@@ -188,7 +215,7 @@ export const createLandListing = async (req, res) => {
     }
 
     // ── OFFICER NOTIFICATIONS FOR NEW LISTINGS ──────────────────────────
-    if (verificationResult.verificationStatus !== 'REJECTED') {
+    if (authResult.decision !== 'AUTO_REJECT') {
       setImmediate(async () => {
         try {
           const targetRoles = ['MUNICIPAL_OFFICER', 'VERIFICATION_OFFICER', 'SYSTEM_ADMIN'];
@@ -203,7 +230,7 @@ export const createLandListing = async (req, res) => {
               standNumber: land.standNumber,
               owner: req.user.id,
               flagged: fraudFlags.length > 0,
-              score: verificationResult.verificationScore
+              score: authResult.score
             });
           }
         } catch (notifErr) {
@@ -214,9 +241,21 @@ export const createLandListing = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: land.verification.status === 'AUTO_VERIFIED' ? 'Land listing created and automatically verified.' : 'Land listing created successfully. Pending verification.',
+      message: authResult.decision === 'AUTO_APPROVE'
+        ? 'Land listing created. Stand verified against authority registry. Pending officer document review.'
+        : authResult.decision === 'HUMAN_REVIEW'
+        ? 'Land listing created. Pending verification by an officer.'
+        : 'Land listing created but was auto-rejected. See verificationResult for details.',
+      kycWarning: !kycApproved
+        ? 'Your KYC verification is pending. Complete identity verification (national ID + selfie) so officers can approve your listing faster.'
+        : null,
       data: land,
-      verificationResult
+      verificationResult: {
+        decision: authResult.decision,
+        score: authResult.score,
+        flags: authResult.flags,
+        notes: authResult.notes
+      }
     });
   } catch (error) {
     console.error('Error creating land listing:', error);
@@ -328,11 +367,12 @@ export const searchAuthorityRegistry = async (req, res) => {
         address: r.address?.street,
         suburb: r.address?.suburb,
         standNumber: r.standNumber,
-        coordinates: {
-          lat: r.location.coordinates[1],
-          lng: r.location.coordinates[0]
-        },
-        owner: r.currentOwner?.name
+        coordinates: r.geoLocation?.coordinates ? {
+          lat: r.geoLocation.coordinates[1],
+          lng: r.geoLocation.coordinates[0]
+        } : null,
+        registeredOwner: r.registeredOwner?.fullName,
+        ownerType: r.registeredOwner?.entityType
       }))
     });
   } catch (error) {
@@ -401,19 +441,25 @@ export const getLandListings = async (req, res) => {
       if (maxSize) filter['landDetails.size.squareMeters'].$lte = parseFloat(maxSize);
     }
 
-    // Only show verified and active lands to buyers
+    // ── BUYER VISIBILITY: only show publicly approved listings ─────────────
+    // isPublic is set to true ONLY when a Verification Officer manually approves.
+    // This is the single source of truth for buyer visibility.
     if (req.user.role === 'BUYER') {
-      filter['verification.status'] = { $in: ['VERIFIED', 'AUTO_VERIFIED'] };
-      filter['verification.isVerified'] = true;
-      filter['transaction.status'] = 'AVAILABLE';
-      filter['isActive'] = true;
+      filter['isPublic'] = true;
+      filter['verification.status'] = { $in: ['VERIFIED'] };
       filter['listingStatus'] = 'verified';
+      filter['isActive'] = true;
     }
+
+    // ── SELLER: only show their own listings (all statuses) ──────────────────
+    // Sellers see ALL their listings regardless of public status
+    // so they can track what's pending, rejected, or approved.
+    // (filter['owner'] already set above if ?owner= param provided)
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const lands = await Land.find(filter)
-      .populate('owner', 'firstName lastName email verification.isVerified verification.sellerDetailsApproved')
+      .populate('owner', 'firstName lastName email verification.isVerified verification.sellerDetailsApproved verification.kycStatus')
       .select('standNumber titleDeedNumber location landDetails transaction verification.status verification.isVerified verification.authorityVerified verification.verifiedBy verification.verificationDate verification.deedsOfficeVerified verification.municipalVerified verification.autoVerification.verificationScore verification.autoVerification.riskScore verification.autoVerification.decision verification.autoVerification.reason verification.autoVerification.isDuplicateRejection verification.autoVerification.flags images owner createdAt updatedAt')
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -488,7 +534,7 @@ export const getLandById = async (req, res) => {
     const { landId } = req.params;
 
     const land = await Land.findById(landId)
-      .populate('owner', 'firstName lastName email phoneNumber verification.isVerified verification.sellerDetailsApproved')
+      .populate('owner', 'firstName lastName email phoneNumber verification.isVerified verification.sellerDetailsApproved verification.kycStatus')
       .populate('verification.verifiedBy', 'firstName lastName')
       .populate('fraudFlags.reportedBy', 'firstName lastName');
 
@@ -786,103 +832,146 @@ export const createListingRevision = async (req, res) => {
   }
 };
 
-// Verify land ownership
+// Verify / Approve / Reject a land listing
+// Officers and Admins can approve ANY listing (even auto-rejected)
+// but MUST provide a written reason for the audit trail.
 export const verifyLandOwnership = async (req, res) => {
   try {
     const { landId } = req.params;
     const { verificationStatus, verificationNotes } = req.body;
 
     const land = await Land.findById(landId).populate('owner');
-
     if (!land) {
-      return res.status(404).json({
-        success: false,
-        message: 'Land not found'
-      });
+      return res.status(404).json({ success: false, message: 'Land listing not found.' });
     }
 
-    // --- DUPLICATE REJECTION PROTECTION: Cannot override duplicates ---
-    if (verificationStatus === 'VERIFIED' && land.verification?.autoVerification?.isDuplicateRejection) {
+    const previousStatus = land.verification.status;
+    const verificationScore = land.verification?.autoVerification?.verificationScore ?? 0;
+    const isDuplicateRejection = land.verification?.autoVerification?.isDuplicateRejection === true;
+
+    // ── HARD BLOCK: Cannot approve a confirmed DUPLICATE stand number ────────
+    if (verificationStatus === 'VERIFIED' && isDuplicateRejection) {
       return res.status(403).json({
         success: false,
-        message: 'Cannot Approve Duplicate: This listing was auto-rejected for being a duplicate stand number. It cannot be approved.',
-        details: `Duplicate detected: Stand ${land.standNumber} is already listed in the system.`
+        message: 'Cannot approve a duplicate listing. Stand number already exists in the system.',
+        details: `Stand ${land.standNumber} is a confirmed duplicate.`
       });
     }
 
-    // Get the verification score (0-100)
-    const verificationScore = land.verification?.autoVerification?.verificationScore || 0;
+    // ── MANDATORY REASON for any approval of low-score or auto-rejected listing ──
+    const isOverride = verificationStatus === 'VERIFIED' && (
+      verificationScore < 70 ||
+      previousStatus === 'REJECTED' ||
+      previousStatus === 'SUSPICIOUS'
+    );
 
-    // --- ANTI-BRIBERY & OVERRIDE PROTECTION ---
-    // If trying to approve a low-score listing, a reason is MANDATORY for all roles (Officer/Admin)
-    if (verificationStatus === 'VERIFIED' && verificationScore < 70) {
-      if (!verificationNotes || verificationNotes.trim() === '') {
-        return res.status(400).json({
-          success: false,
-          message: 'Reason Required: A verification score below 70% requires a mandatory explanation/justification for the audit trail.',
-          details: `Current Score: ${verificationScore}%`
-        });
-      }
-
-      // Log the override to audit trail for accountability
-      console.warn(`[AUDIT] Verification Override by ${req.user.role} (${req.user.id}) for land ${land._id}. Score: ${verificationScore}%. Reason: ${verificationNotes}`);
+    if (isOverride && (!verificationNotes || verificationNotes.trim().length < 10)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Override Reason Required: Approving a rejected or low-score listing requires a written justification (minimum 10 characters) for the audit trail.',
+        details: { previousStatus, score: verificationScore }
+      });
     }
 
+    // ── Apply the officer's decision ─────────────────────────────────────
     const deedsOfficeResult = await verifyDeedsOffice(land.titleDeedNumber);
     const municipalResult = await verifyMunicipalRecords(land.standNumber);
 
-    land.verification.status = verificationStatus; // VERIFIED, REJECTED, SUSPENDED
+    land.verification.status = verificationStatus;
     land.verification.isVerified = verificationStatus === 'VERIFIED';
     land.verification.verifiedBy = req.user.id;
     land.verification.verificationDate = new Date();
     land.verification.deedsOfficeVerified = deedsOfficeResult.verified;
     land.verification.municipalVerified = municipalResult.verified;
+    land.verification.adminNotes = verificationNotes || null;
+    land.verification.documentVerified = verificationStatus === 'VERIFIED';
 
     if (verificationStatus === 'VERIFIED') {
-      // RESIDENTIAL-ONLY SYSTEM: Block commercial and non-residential zoning
-      if (land.landDetails?.zoning !== 'RESIDENTIAL') {
-        return res.status(400).json({
-          success: false,
-          message: 'This system only accepts RESIDENTIAL properties',
-          details: `Stand zoning is ${land.landDetails?.zoning}. Only RESIDENTIAL stands can be verified.`
-        });
-      }
-
       land.listingStatus = 'verified';
       land.transaction.status = 'AVAILABLE';
-      land.isPublic = true; // Ensure verified stands are visible to the public
+      land.isPublic = true; // Only set public AFTER officer approves
 
-      // Notify land owner
-      createNotification(land.owner._id, 'LAND_VERIFIED', {
-        landId: land._id,
-        standNumber: land.standNumber,
-        verifiedBy: req.user.id
-      });
+      try {
+        createNotification(land.owner._id, 'LAND_VERIFIED', {
+          landId: land._id,
+          standNumber: land.standNumber,
+          verifiedBy: req.user.id
+        });
+      } catch (notifErr) {
+        console.warn('Notification error (non-fatal):', notifErr.message);
+      }
     } else if (verificationStatus === 'REJECTED') {
       land.listingStatus = 'rejected';
       land.transaction.status = 'FLAGGED';
+      land.isPublic = false;
 
-      // Notify land owner about rejection
-      createNotification(land.owner._id, 'LAND_VERIFICATION_REJECTED', {
-        landId: land._id,
-        standNumber: land.standNumber,
-        notes: verificationNotes
-      });
+      try {
+        createNotification(land.owner._id, 'LAND_VERIFICATION_REJECTED', {
+          landId: land._id,
+          standNumber: land.standNumber,
+          notes: verificationNotes
+        });
+      } catch (notifErr) {
+        console.warn('Notification error (non-fatal):', notifErr.message);
+      }
     }
 
     await land.save();
 
-    res.status(200).json({
+    // ── AUDIT LOG: Record full details of who approved/rejected and why ────
+    try {
+      const AuditLog = (await import('../models/audit-log-model.js')).default;
+      await AuditLog.log({
+        userId: req.user.id,
+        userRole: req.user.role,
+        action: isOverride
+          ? `OVERRIDE_${verificationStatus}: Officer manually approved previously ${previousStatus} listing`
+          : `${verificationStatus}: Officer reviewed land listing`,
+        actionCategory: verificationStatus === 'VERIFIED' ? 'APPROVE' : 'REJECT',
+        resourceType: 'LAND',
+        resourceId: land._id.toString(),
+        resourceName: land.standNumber,
+        changes: {
+          before: { status: previousStatus, isPublic: land.isPublic },
+          after: { status: verificationStatus, isPublic: verificationStatus === 'VERIFIED' }
+        },
+        reason: verificationNotes || 'No notes provided',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        metadata: {
+          verificationScore,
+          previousStatus,
+          isOverride,
+          isDuplicateRejection,
+          officerEmail: req.user.email,
+          officerName: `${req.user.firstName} ${req.user.lastName}`
+        }
+      });
+    } catch (auditErr) {
+      // Non-fatal — log to console but don't fail the request
+      console.error('[AUDIT LOG ERROR]:', auditErr.message);
+    }
+
+    // Console log for server-side visibility
+    console.log(`[VERIFICATION] ${req.user.role} ${req.user.email} → ${verificationStatus} for Stand ${land.standNumber} (Score: ${verificationScore}) ${isOverride ? '[OVERRIDE]' : ''} Reason: ${verificationNotes || 'N/A'}`);
+
+    return res.status(200).json({
       success: true,
-      message: `Land ${verificationStatus.toLowerCase()} successfully`,
-      data: land
+      message: `Land listing ${verificationStatus.toLowerCase()} successfully by ${req.user.firstName} ${req.user.lastName}.`,
+      data: {
+        landId: land._id,
+        standNumber: land.standNumber,
+        verificationStatus,
+        isPublic: land.isPublic,
+        verifiedBy: `${req.user.firstName} ${req.user.lastName} (${req.user.role})`,
+        verifiedAt: land.verification.verificationDate,
+        isOverride,
+        notes: verificationNotes || null
+      }
     });
   } catch (error) {
-    console.error('Error verifying land ownership:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('Error verifying land listing:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 

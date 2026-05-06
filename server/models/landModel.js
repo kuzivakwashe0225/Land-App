@@ -100,17 +100,45 @@ const landSchema = new mongoose.Schema({
   verification: {
     status: {
       type: String,
-      enum: ['DRAFT', 'PENDING', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED', 'SUSPENDED', 'SUSPICIOUS'],
-      default: 'DRAFT'
+      enum: [
+        'DRAFT',
+        'PENDING_VERIFICATION',     // Submitted, awaiting officer review
+        'AUTHORITY_VERIFIED',        // Passed authority registry check, awaiting doc review
+        'PENDING_DOCUMENT_REVIEW',   // Documents under review by officer
+        'VERIFIED',                  // Fully verified and approved by officer
+        'REJECTED',                  // Rejected (auto or manual)
+        'SUSPENDED',                 // Suspended pending investigation
+        'SUSPICIOUS'                 // Flagged as suspicious
+      ],
+      default: 'PENDING_VERIFICATION'
     },
     isVerified: { type: Boolean, default: false },
-    authorityVerified: { type: Boolean, default: false }, // Direct match with municipality records
+    // Seller KYC gate: true if seller had kycStatus=APPROVED at time of listing
+    sellerVerified: { type: Boolean, default: false },
+    // Authority registry gate: true if stand matched the dummy authority DB
+    authorityVerified: { type: Boolean, default: false },
+    // Document review gate: true after officer manually reviews uploaded docs
+    documentVerified: { type: Boolean, default: false },
+    // Map gate: true if GPS coordinates are within 150m of authority record
+    mapVerified: { type: Boolean, default: false },
     verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     verificationDate: Date,
     deedsOfficeVerified: { type: Boolean, default: false },
     municipalVerified: { type: Boolean, default: false },
     rejectionReason: String,
     adminNotes: String,
+    // Authority database match details — shown to officer on their dashboard
+    authorityMatch: {
+      authorityRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'AuthorityRecords' },
+      titleDeedMatched: Boolean,
+      standNumberMatched: Boolean,
+      addressMatched: Boolean,
+      landUseMatched: Boolean,
+      coordinateDistanceMeters: Number,
+      score: Number,
+      decision: { type: String, enum: ['AUTO_APPROVE', 'HUMAN_REVIEW', 'AUTO_REJECT'] },
+      flags: [String]
+    },
     verificationDocuments: [{
       documentType: {
         type: String,

@@ -24,12 +24,12 @@ import Land from '../models/landModel.js';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const hash = (pw) => bcryptjs.hashSync(pw, 10);
 
-const COMMON_PASS = 'Test@1234';       // All test accounts use this password
+const COMMON_PASS = 'Test@1234';
 const hashed = hash(COMMON_PASS);
 
-// ── Seed Data ─────────────────────────────────────────────────────────────────
+// ── Seed Users ────────────────────────────────────────────────────────────────
 const USERS = [
-  // ── System Admin ────────────────────────────────────────────────────────────
+  // ── System Admins ──────────────────────────────────────────────────────────
   {
     firstName: 'Admin',
     lastName: 'LandSolutions',
@@ -45,15 +45,15 @@ const USERS = [
     firstName: 'Isaia',
     lastName: 'Admin',
     email: 'isaia@landsolutions.zw',
-    phoneNumber: '+263770000000',
-    nationalId: '00-0000000A00',
+    phoneNumber: '+263770000001',
+    nationalId: '00-0000001A00',
     role: 'SYSTEM_ADMIN',
     authentication: { password: hashed },
     verification: { kycStatus: 'APPROVED', isVerified: true },
     activity: { accountStatus: 'ACTIVE' },
   },
 
-  // ── Verification Officer ─────────────────────────────────────────────────────
+  // ── Verification Officer ───────────────────────────────────────────────────
   {
     firstName: 'Tendai',
     lastName: 'Moyo',
@@ -66,7 +66,7 @@ const USERS = [
     activity: { accountStatus: 'ACTIVE' },
   },
 
-  // ── Municipal Officer ────────────────────────────────────────────────────────
+  // ── Municipal Officer ──────────────────────────────────────────────────────
   {
     firstName: 'Farai',
     lastName: 'Chigumbura',
@@ -79,7 +79,7 @@ const USERS = [
     activity: { accountStatus: 'ACTIVE' },
   },
 
-  // ── Sellers (KYC Approved — can list land) ──────────────────────────────────
+  // ── Sellers (KYC Approved — can list land) ────────────────────────────────
   {
     firstName: 'John',
     lastName: 'Mutasa',
@@ -110,12 +110,12 @@ const USERS = [
     nationalId: '96-6789012F96',
     role: 'SELLER',
     authentication: { password: hashed },
-    // NOT KYC approved — to test the KYC gate on land listing
+    // Intentionally NOT KYC approved — to show the KYC gate
     verification: { kycStatus: 'PENDING', isVerified: false },
     activity: { accountStatus: 'ACTIVE' },
   },
 
-  // ── Buyers ──────────────────────────────────────────────────────────────────
+  // ── Buyers ────────────────────────────────────────────────────────────────
   {
     firstName: 'Grace',
     lastName: 'Ndlovu',
@@ -142,7 +142,10 @@ const USERS = [
 
 // ── Land Listings ─────────────────────────────────────────────────────────────
 const buildLands = (ownerIds) => [
-  // ── STORY 1: THE PERFECT LISTING (Verified) ──────────────────────────────
+
+  // ── STORY 1: FULLY VERIFIED — Perfect authority registry match ────────────
+  // Stand number + title deed both exist in dummy authority DB.
+  // Seller KYC approved. All gates passed. isPublic = true.
   {
     standNumber: 'STAND-001-BORROWDALE',
     titleDeedNumber: 'TD/HRE/2019/001',
@@ -151,20 +154,32 @@ const buildLands = (ownerIds) => [
       address: { street: '14 Borrowdale Road', suburb: 'HARARE', province: 'HARARE' },
       coordinates: { type: 'Point', coordinates: [31.0929, -17.7442] }
     },
-    landDetails: { size: { squareMeters: 1200, hectares: 0.12 }, zoning: 'RESIDENTIAL', landUse: 'VACANT', description: 'DEMO: This listing was automatically verified because it matches Council records perfectly.' },
+    landDetails: {
+      size: { squareMeters: 1200, hectares: 0.12 },
+      zoning: 'RESIDENTIAL',
+      landUse: 'VACANT',
+      description: 'DEMO: Fully verified. Title deed matched authority registry, KYC approved, officer reviewed documents.'
+    },
     transaction: { listedPrice: { amount: 45000, currency: 'USD' }, status: 'AVAILABLE' },
     isPublic: true,
     listingStatus: 'verified',
     verification: {
       status: 'VERIFIED',
       isVerified: true,
+      sellerVerified: true,
+      authorityVerified: true,
+      documentVerified: true,
+      mapVerified: true,
       verifiedBy: ownerIds.officer,
       verificationDate: new Date(),
-      autoVerification: { ranAt: new Date(), riskScore: 5, decision: 'AUTO_APPROVE', signals: { nameMatched: true, documentTampered: false, gpsProofSubmitted: true, gpsProofValid: true } }
+      authorityMatch: { titleDeedMatched: true, score: 90, decision: 'AUTO_APPROVE', flags: [] },
+      autoVerification: { ranAt: new Date(), verificationScore: 90, riskScore: 10, decision: 'AUTO_APPROVE', flags: [] }
     }
   },
 
-  // ── STORY 2: THE DISPUTED STAND (Rejected) ──────────────────────────────
+  // ── STORY 2: AUTO-REJECTED — Disputed stand in authority registry ─────────
+  // Title deed found in registry but stand has DISPUTED status + encumbrances.
+  // Score drops below threshold → AUTO_REJECT.
   {
     standNumber: 'STAND-010-REJECTED-OWNER',
     titleDeedNumber: 'TD/BYO/2023/505',
@@ -173,17 +188,28 @@ const buildLands = (ownerIds) => [
       address: { street: '55 Disputed Way', suburb: 'BULAWAYO', province: 'BULAWAYO' },
       coordinates: { type: 'Point', coordinates: [28.6000, -20.1600] }
     },
-    landDetails: { size: { squareMeters: 1000, hectares: 0.1 }, zoning: 'RESIDENTIAL', landUse: 'VACANT', description: 'DEMO: This was rejected by an Officer because the Council Registry shows a dispute.' },
-    transaction: { listedPrice: { amount: 15000, currency: 'USD' }, status: 'REJECTED' },
+    landDetails: {
+      size: { squareMeters: 1000, hectares: 0.1 },
+      zoning: 'RESIDENTIAL',
+      landUse: 'VACANT',
+      description: 'DEMO: Auto-rejected. Authority registry shows an active dispute and encumbrances on this stand.'
+    },
+    transaction: { listedPrice: { amount: 15000, currency: 'USD' }, status: 'FLAGGED' },
+    isPublic: false,
+    listingStatus: 'rejected',
     verification: {
       status: 'REJECTED',
       isVerified: false,
-      rejectionReason: 'Ownership dispute detected in deeds office records during manual audit.',
-      verifiedBy: ownerIds.admin
+      sellerVerified: true,
+      authorityVerified: false,
+      rejectionReason: 'Stand has active dispute in authority registry. Encumbrances: CAVEAT, COURT_ORDER.',
+      authorityMatch: { titleDeedMatched: true, score: 20, decision: 'AUTO_REJECT', flags: ['DISPUTE_OR_ENCUMBRANCE_FOUND'] },
+      autoVerification: { ranAt: new Date(), verificationScore: 20, riskScore: 80, decision: 'AUTO_REJECT', isDuplicateRejection: false, flags: ['DISPUTE_OR_ENCUMBRANCE_FOUND'] }
     }
   },
 
-  // ── STORY 3: NEEDS OFFICER ATTENTION (Pending) ──────────────────────────
+  // ── STORY 3: PENDING OFFICER REVIEW — Stand found, GPS slightly off ───────
+  // Score: 75 (HUMAN_REVIEW range). Waiting for officer to approve or reject.
   {
     standNumber: 'STAND-004-CHITUNGWIZA',
     titleDeedNumber: 'TD/CTZ/2022/088',
@@ -192,16 +218,26 @@ const buildLands = (ownerIds) => [
       address: { street: '45 Seke Road', suburb: 'CHITUNGWIZA', province: 'HARARE' },
       coordinates: { type: 'Point', coordinates: [31.0700, -17.9900] }
     },
-    landDetails: { size: { squareMeters: 600, hectares: 0.06 }, zoning: 'RESIDENTIAL', landUse: 'VACANT', description: 'DEMO: This is waiting for an Officer to review because the owner name slightly differs from registry.' },
+    landDetails: {
+      size: { squareMeters: 600, hectares: 0.06 },
+      zoning: 'RESIDENTIAL',
+      landUse: 'VACANT',
+      description: 'DEMO: Pending officer review. Stand is in the registry but GPS pin was 120m from the authority coordinate.'
+    },
     transaction: { listedPrice: { amount: 12000, currency: 'USD' }, status: 'UNDER_REVIEW' },
+    isPublic: false,
+    listingStatus: 'pending_verification',
     verification: {
       status: 'PENDING_VERIFICATION',
       isVerified: false,
-      autoVerification: { ranAt: new Date(), riskScore: 40, decision: 'HUMAN_REVIEW', flags: ['NAME_MISMATCH'], signals: { nameMatched: false, documentTampered: false } }
+      sellerVerified: true,
+      authorityVerified: false,
+      authorityMatch: { titleDeedMatched: true, score: 75, decision: 'HUMAN_REVIEW', flags: ['LOCATION_APPROXIMATE'], coordinateDistanceMeters: 120 },
+      autoVerification: { ranAt: new Date(), verificationScore: 75, riskScore: 25, decision: 'HUMAN_REVIEW', flags: ['LOCATION_APPROXIMATE'] }
     }
   },
 
-  // ── STORY 4: RECENTLY SOLD (Historical Data) ─────────────────────────────
+  // ── STORY 4: SOLD — Historical record ────────────────────────────────────
   {
     standNumber: 'STAND-009-MT-PLEASANT',
     titleDeedNumber: 'TD/HRE/2022/101',
@@ -210,14 +246,27 @@ const buildLands = (ownerIds) => [
       address: { street: '12 Norfolk Road', suburb: 'HARARE', province: 'HARARE' },
       coordinates: { type: 'Point', coordinates: [31.0450, -17.7850] }
     },
-    landDetails: { size: { squareMeters: 2000, hectares: 0.2 }, zoning: 'RESIDENTIAL', landUse: 'VACANT', description: 'DEMO: This listing was recently sold. It appears in the Seller historical records.' },
+    landDetails: {
+      size: { squareMeters: 2000, hectares: 0.2 },
+      zoning: 'RESIDENTIAL',
+      landUse: 'VACANT',
+      description: 'DEMO: This stand was sold. It appears in seller historical records.'
+    },
     transaction: { listedPrice: { amount: 85000, currency: 'USD' }, status: 'SOLD' },
     isPublic: true,
     listingStatus: 'sold',
-    verification: { status: 'VERIFIED', isVerified: true, verificationDate: new Date() }
+    verification: {
+      status: 'VERIFIED',
+      isVerified: true,
+      sellerVerified: true,
+      authorityVerified: true,
+      documentVerified: true,
+      verificationDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      authorityMatch: { titleDeedMatched: true, score: 95, decision: 'AUTO_APPROVE', flags: [] }
+    }
   },
 
-  // ── STORY 5: AI-DETECTED FRAUD (Flagged) ────────────────────────────────
+  // ── STORY 5: SUSPICIOUS — AI-flagged, under investigation ────────────────
   {
     standNumber: 'STAND-005-FLAGGED',
     titleDeedNumber: 'TD/HRE/2020/999',
@@ -226,14 +275,29 @@ const buildLands = (ownerIds) => [
       address: { street: '3 Fake Avenue', suburb: 'HARARE', province: 'HARARE' },
       coordinates: { type: 'Point', coordinates: [31.0335, -17.8250] }
     },
-    landDetails: { size: { squareMeters: 900, hectares: 0.09 }, zoning: 'RESIDENTIAL', landUse: 'VACANT', description: 'DEMO: AI flagged this as fraudulent due to suspicious document metadata.' },
+    landDetails: {
+      size: { squareMeters: 900, hectares: 0.09 },
+      zoning: 'RESIDENTIAL',
+      landUse: 'VACANT',
+      description: 'DEMO: System flagged as suspicious. Stand is under investigation in authority registry.'
+    },
     transaction: { listedPrice: { amount: 25000, currency: 'USD' }, status: 'FLAGGED' },
+    isPublic: false,
+    listingStatus: 'pending_verification',
     verification: {
       status: 'SUSPICIOUS',
       isVerified: false,
-      autoVerification: { ranAt: new Date(), riskScore: 85, decision: 'AUTO_REJECT', flags: ['TAMPERED_DOC'], signals: { documentTampered: true, elaScore: 92 } }
+      sellerVerified: true,
+      authorityVerified: false,
+      authorityMatch: { titleDeedMatched: true, score: 0, decision: 'AUTO_REJECT', flags: ['DISPUTE_OR_ENCUMBRANCE_FOUND'] },
+      autoVerification: { ranAt: new Date(), verificationScore: 0, riskScore: 100, decision: 'AUTO_REJECT', flags: ['DISPUTE_OR_ENCUMBRANCE_FOUND'] }
     },
-    fraudFlags: [{ flagType: 'FAKE_DOCUMENTS', description: 'Auto-detected: Document metadata suggests digital modification.', status: 'PENDING' }]
+    fraudFlags: [{
+      flagType: 'FAKE_DOCUMENTS',
+      description: 'Auto-detected: Stand under investigation in authority registry. Encumbrances present.',
+      triggeredBySystem: true,
+      status: 'PENDING'
+    }]
   },
 ];
 
@@ -246,62 +310,61 @@ const seed = async () => {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB\n');
 
-    // Clear existing data
     console.log('🗑️  Clearing existing test data...');
     await User.deleteMany({});
     await Land.deleteMany({});
     console.log('   Users cleared ✓');
     console.log('   Lands cleared ✓\n');
 
-    // Insert users
     console.log('👤 Creating users...');
     const createdUsers = await User.insertMany(USERS);
     const userMap = {};
     createdUsers.forEach(u => {
-      const key = u.role === 'SYSTEM_ADMIN' ? 'admin'
-        : u.role === 'VERIFICATION_OFFICER' ? 'officer'
+      const key = u.role === 'VERIFICATION_OFFICER' ? 'officer'
         : u.role === 'MUNICIPAL_OFFICER' ? 'municipal'
         : u.email.includes('seller1') ? 'seller1'
         : u.email.includes('seller2') ? 'seller2'
         : u.email.includes('seller3') ? 'seller3'
         : u.email.includes('buyer1') ? 'buyer1'
-        : 'buyer2';
+        : u.email.includes('buyer2') ? 'buyer2'
+        : 'admin';
       userMap[key] = u._id;
       console.log(`   ✓ ${u.role.padEnd(22)} ${u.email}`);
     });
 
-    // Insert lands
     console.log('\n🏡 Creating land listings...');
     const lands = buildLands(userMap);
     const createdLands = await Land.insertMany(lands);
     createdLands.forEach(l => {
-      console.log(`   ✓ ${l.verification.status.padEnd(12)} Stand ${l.standNumber} — $${l.transaction.listedPrice.amount.toLocaleString()} USD`);
+      const status = (l.verification.status || 'UNKNOWN').padEnd(20);
+      const pub = l.isPublic ? '🌐 PUBLIC' : '🔒 HIDDEN';
+      console.log(`   ✓ ${status} ${pub}  ${l.standNumber}`);
     });
 
-    // Print test credentials
     console.log('\n' + '═'.repeat(65));
-    console.log('🔑 TEST CREDENTIALS (all use password: Test@1234)');
+    console.log('🔑 TEST CREDENTIALS — password: Test@1234');
     console.log('═'.repeat(65));
     console.log('  SYSTEM ADMIN         admin@landsolutions.zw');
+    console.log('  PERSONAL ADMIN       isaia@landsolutions.zw');
     console.log('  VERIFICATION OFFICER officer@landsolutions.zw');
     console.log('  MUNICIPAL OFFICER    municipal@landsolutions.zw');
     console.log('  SELLER (KYC OK)      seller1@test.zw');
     console.log('  SELLER (KYC OK)      seller2@test.zw');
-    console.log('  SELLER (KYC PENDING) seller3@test.zw  ← cannot list land');
-    console.log('  BUYER (KYC OK)       buyer1@test.zw');
-    console.log('  BUYER (no KYC)       buyer2@test.zw');
-    console.log('─'.repeat(65));
-    console.log('  PASSWORD (all):      Test@1234');
+    console.log('  SELLER (KYC PENDING) seller3@test.zw  ← blocked from listing');
+    console.log('  BUYER                buyer1@test.zw');
     console.log('═'.repeat(65));
 
     console.log('\n📊 Seed Summary:');
-    console.log(`   Users created:  ${createdUsers.length}`);
-    console.log(`   Lands created:  ${createdLands.length}`);
-    console.log(`   Verified:       ${createdLands.filter(l => l.verification.status === 'VERIFIED').length}`);
-    console.log(`   Pending:        ${createdLands.filter(l => l.verification.status === 'PENDING').length}`);
-    console.log(`   Flagged/Susp:   ${createdLands.filter(l => ['SUSPENDED', 'REJECTED'].includes(l.verification.status)).length}`);
+    console.log(`   Users:    ${createdUsers.length}`);
+    console.log(`   Lands:    ${createdLands.length}`);
+    console.log(`   Verified: ${createdLands.filter(l => l.verification.status === 'VERIFIED').length}`);
+    console.log(`   Pending:  ${createdLands.filter(l => l.verification.status === 'PENDING_VERIFICATION').length}`);
+    console.log(`   Rejected: ${createdLands.filter(l => ['REJECTED', 'SUSPICIOUS'].includes(l.verification.status)).length}`);
+    console.log(`   Public (buyer-visible): ${createdLands.filter(l => l.isPublic).length}`);
 
-    console.log('\n✅ Seed complete! Run tests with: node scripts/test-api.js\n');
+    console.log('\n✅ Seed complete!');
+    console.log('   Run: node scripts/seed-dummy-authority.js  to seed authority records');
+    console.log('   Run: node scripts/test-verification.js  to run verification tests\n');
     process.exit(0);
   } catch (err) {
     console.error('\n❌ Seed failed:', err.message);

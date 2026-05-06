@@ -224,9 +224,9 @@ export const submitSellerDetailsVerification = async (req, res, next) => {
     }
 
     user.verification.kycDocs = uploadedDocs;
-    user.verification.sellerDetailsApproved = true;
+    user.verification.kycStatus = 'PENDING'; // Required for officer review
+    user.verification.sellerDetailsApproved = false; // Cannot be auto-approved
     user.verification.sellerDetailsSubmittedAt = new Date();
-    user.verification.sellerDetailsApprovedAt = new Date();
     user.markModified('verification');
 
     try {

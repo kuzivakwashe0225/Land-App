@@ -20,9 +20,11 @@ router.get('/public-stats', verifyUser, async (req, res) => {
     res.set('Expires', '0');
 
     const stats = {
-      totalListings: await Land.countDocuments(),
+      totalListings: await Land.countDocuments({ isPublic: true, isActive: true }),
       verifiedListings: await Land.countDocuments({ 
-        'verification.status': { $in: ['VERIFIED', 'AUTO_VERIFIED'] }
+        'verification.status': { $in: ['VERIFIED', 'AUTO_VERIFIED'] },
+        isPublic: true,
+        isActive: true
       }),
       pendingListings: await Land.countDocuments({ 
         'verification.status': { $in: ['PENDING_VERIFICATION', 'REQUIRES_REVIEW'] } 
@@ -265,4 +267,112 @@ router.get('/statistics-by-suburb', verifyUser, requireRole('ADMIN', 'SYSTEM_ADM
   }
 });
 
+/**
+ * GET /api/dashboard/fraud-analytics
+ * Fraud reduction evaluation dashboard — for System Admin and Verification Officers.
+ * Provides metrics to evaluate effectiveness of the verification system at reducing fraud.
+ */
+router.get('/fraud-analytics', verifyUser, requireRole('ADMIN', 'SYSTEM_ADMIN', 'VERIFICATION_OFFICER'), async (req, res) => {
+  try {
+    const [
+      totalSubmitted,
+      autoVerified,
+      autoRejected,
+      humanReviewed,
+      duplicateAttempts,
+      flaggedByUsers,
+      resolvedReports,
+      totalReports,
+      avgVerificationTime
+    ] = await Promise.all([
+      // Total listings ever submitted
+      Land.countDocuments(),
+
+      // Auto-approved by the authority verification engine
+      Land.countDocuments({ 'verification.autoVerification.decision': 'AUTO_APPROVE' }),
+
+      // Auto-rejected by the engine (failed scoring or duplicate)
+      Land.countDocuments({ 'verification.autoVerification.decision': 'AUTO_REJECT' }),
+
+      // Sent to human review (65–84 score)
+      Land.countDocuments({ 'verification.autoVerification.decision': 'HUMAN_REVIEW' }),
+
+      // Duplicate stand number attempts caught by system
+      Land.countDocuments({ 'verification.autoVerification.isDuplicateRejection': true }),
+
+      // Listings flagged by users (fraud reports submitted)
+      Land.countDocuments({ 'fraudFlags.0': { $exists: true } }),
+
+      // Reports that were resolved
+      Report.countDocuments({ status: 'RESOLVED' }),
+
+      // Total reports
+      Report.countDocuments(),
+
+      // Average verification time in hours (createdAt → verificationDate)
+      Land.aggregate([
+        {
+          $match: {
+            'verification.verificationDate': { $exists: true },
+            'verification.status': 'VERIFIED'
+          }
+        },
+        {
+          $project: {
+            verificationTimeHours: {
+              $divide: [
+                { $subtract: ['$verification.verificationDate', '$createdAt'] },
+                3600000 // ms → hours
+              ]
+            }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            avgHours: { $avg: '$verificationTimeHours' }
+          }
+        }
+      ])
+    ]);
+
+    const avgHours = avgVerificationTime[0]?.avgHours || 0;
+    const fraudPreventionRate = totalSubmitted > 0
+      ? Math.round(((autoRejected + duplicateAttempts) / totalSubmitted) * 100)
+      : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        overview: {
+          totalSubmitted,
+          autoVerified,
+          autoRejected,
+          humanReviewed,
+          fraudPreventionRate: `${fraudPreventionRate}%`,
+          avgVerificationTimeHours: Math.round(avgHours * 10) / 10
+        },
+        fraudIndicators: {
+          duplicateAttemptsCaught: duplicateAttempts,
+          flaggedByUsers: flaggedByUsers,
+          totalReports,
+          resolvedReports,
+          reportResolutionRate: totalReports > 0
+            ? `${Math.round((resolvedReports / totalReports) * 100)}%`
+            : '0%'
+        },
+        description: 'These metrics evaluate how effectively the authority verification engine reduces fraudulent land transactions.'
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching fraud analytics:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch fraud analytics',
+      error: error.message
+    });
+  }
+});
+
 export default router;
+
